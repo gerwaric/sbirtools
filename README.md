@@ -59,6 +59,59 @@ with sbirtools.SandboxSession(timeout=30) as session:
 
 Each `run()` reuses the same worker; call `session.close()` or exit the `with` block to stop the worker.
 
+## Using sbirtools as an agent tool
+
+Expose sbirtools as a **tool** your agent can call: the agent sends generated Python code; your tool runs it and returns the result. Use the built-in handlers so you don't have to write the wrapper or the tool description yourself.
+
+### 1. Setup (once)
+
+```bash
+pip install sbirtools
+sbirtools-download-data https://data.www.sbir.gov/awarddatapublic/award_data.csv
+```
+
+### 2. Choose a handler and register it
+
+**Stateless (one-off runs):** Import `run_sbir_code` and pass it as your tool. Each call runs in a new process and loads the data.
+
+```python
+from sbirtools import run_sbir_code
+
+# Register with your framework, e.g. tools=[run_sbir_code]
+```
+
+**Session-based (many runs per task):** Import `SessionTool`, create one per conversation or task, and pass its `run` method (or the instance itself if your framework calls the tool with `tool(code)`). The dataset stays in memory. Call `close()` when the task ends.
+
+```python
+from sbirtools import SessionTool
+
+tool = SessionTool(timeout=30)
+# Register with your framework, e.g. tools=[tool.run] or tools=[tool]
+# When the task ends: tool.close()
+```
+
+### 3. Tool name and description
+
+- **Name:** Use a name your framework expects (e.g. `run_sbir_code` or `query_award_data`). When using the importable handlers, the function or method name is often used automatically.
+- **Description:** The handlers’ docstrings are written for the LLM. Most frameworks (OpenAI, LangChain, etc.) use the function’s or method’s docstring as the tool description, so you usually don’t need to paste one — just register the handler.
+
+For the full list of DataFrame columns, see [docs/sample-sbir-awards.csv](docs/sample-sbir-awards.csv) or [DESIGN.md §5](docs/DESIGN.md).
+
+### 4. Minimal example
+
+```python
+from sbirtools import run_sbir_code, SessionTool
+
+# Stateless: pass the function
+# your_framework.add_tool(run_sbir_code)
+
+# Or session-based: create tool, pass tool.run or tool, then close when done
+tool = SessionTool(timeout=30)
+# your_framework.add_tool(tool.run)  # or tool if it accepts a callable
+# ... run agent ...
+tool.close()
+```
+
 - [Design](docs/DESIGN.md) — architecture, API, security layers, schema
 - [Implementation plan](docs/IMPLEMENTATION_PLAN.md) — phases and tasks
 - [Sample CSV schema](docs/sample-sbir-awards.csv) — column reference

@@ -1,7 +1,12 @@
 """sbirtools: hardened Python sandbox with SBIR awards data for AI agents."""
 
 from sbirtools._result import RunResult
-from sbirtools._sandbox import run_sandbox, SandboxSession
+from sbirtools._sandbox import (
+    SandboxSession,
+    SessionTool,
+    run_sandbox,
+)
+from sbirtools._sandbox import _TOOL_DESCRIPTION
 
 
 def run(code: str, timeout: float = 30.0, **kwargs) -> RunResult:
@@ -34,4 +39,25 @@ def run(code: str, timeout: float = 30.0, **kwargs) -> RunResult:
     return run_sandbox(code, timeout=timeout)
 
 
-__all__ = ["run", "RunResult", "SandboxSession"]
+def run_sbir_code(code: str, timeout: float = 30.0) -> str:
+    """Run Python code against the SBIR awards dataset and return the result as a string.
+
+    Use this as your agent tool handler (stateless: each call loads the data in a new process).
+    Many frameworks use this function's docstring as the tool description for the LLM.
+    """
+    result = run_sandbox(code, timeout=timeout)
+    if result.success:
+        return result.stdout
+    parts = [f"Error: {result.error_message}"] if result.error_message else []
+    if result.stderr:
+        parts.append(result.stderr.strip())
+    return "\n".join(parts) if parts else "Execution failed."
+
+
+run_sbir_code.__doc__ = (
+    "Run Python code against the SBIR awards dataset and return the result as a string.\n\n"
+    + _TOOL_DESCRIPTION
+)
+
+
+__all__ = ["run", "RunResult", "SandboxSession", "SessionTool", "run_sbir_code"]

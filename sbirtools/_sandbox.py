@@ -422,3 +422,41 @@ class SandboxSession:
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
+
+
+# Tool description for LLM (used in run_sbir_code and SessionTool docstrings).
+_TOOL_DESCRIPTION = """Run Python code against the SBIR awards dataset. The code runs in a sandbox with a pandas DataFrame named `award_data` (columns include Company, Award Title, Agency, Branch, Phase, Program, Award Year, Award Amount, Abstract, etc.). Use print() to produce output; that output is returned. You cannot use import or open(); only pandas, numpy, math, re, json, and similar built-ins are available. Example: print(len(award_data)) or print(award_data[award_data["Agency"]=="Department of Defense"].head())."""
+
+
+class SessionTool:
+    """
+    Agent tool that keeps the SBIR dataset in memory across calls. Create once per
+    conversation or task, pass to your framework as the tool handler, then close() when done.
+
+    Many frameworks use this class's run() docstring as the tool description for the LLM.
+    """
+
+    def __init__(self, timeout: float = 30.0):
+        self._session = SandboxSession(timeout=timeout)
+
+    def run(self, code: str, timeout: Optional[float] = None) -> str:
+        """Run Python code against the SBIR awards dataset and return the result as a string."""
+        result = self._session.run(code, timeout=timeout)
+        if result.success:
+            return result.stdout
+        parts = [f"Error: {result.error_message}"] if result.error_message else []
+        if result.stderr:
+            parts.append(result.stderr.strip())
+        return "\n".join(parts) if parts else "Execution failed."
+
+    __call__ = run
+
+    def close(self) -> None:
+        """Stop the worker process. Call when the task or conversation ends."""
+        self._session.close()
+
+
+SessionTool.run.__doc__ = (
+    "Run Python code against the SBIR awards dataset and return the result as a string.\n\n"
+    + _TOOL_DESCRIPTION
+)
