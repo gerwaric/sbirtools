@@ -51,7 +51,7 @@ This plan breaks the work into ordered phases. Each phase produces testable outc
 
 - [ ] Define whitelist of builtins and modules: **pandas**, numpy, `math`, `re`, `json`, `collections`, `datetime`, etc. No `os`, `subprocess`, `socket`, `open`.
 - [ ] User code must not use `import` / `from ... import`; **AST check** (Phase 2.5) rejects those. Sandbox preloads only whitelisted modules into `globals()` before `exec`.
-- [ ] Ensure `load_sbir_dataframe()` is called once and the DataFrame is injected as **`sbir_awards`**.
+- [ ] Ensure `load_sbir_dataframe()` is called once and the DataFrame is injected as **`award_data`**.
 
 ### 2.3 Resource limits
 
@@ -75,7 +75,7 @@ This plan breaks the work into ordered phases. Each phase produces testable outc
 - [ ] Enforce **max captured output length** (stdout): cap at a fixed size (e.g. 1 MB); if exceeded, truncate and append a note (e.g. `"\n... [output truncated]"`).
 - [ ] **Do not** cap DataFrame size: load the entire CSV in `load_sbir_dataframe()` (~250–300 MB in memory); document memory expectation in docs.
 
-**Exit criteria:** `run("print(sbir_awards.head())")` returns a RunResult with stdout containing the head output and success=True; `run("open('/etc/passwd')")` is rejected by AST or fails in sandbox; timeout works.
+**Exit criteria:** `run("print(award_data.head())")` returns a RunResult with stdout containing the head output and success=True; `run("open('/etc/passwd')")` is rejected by AST or fails in sandbox; timeout works.
 
 ---
 
@@ -88,22 +88,35 @@ This plan breaks the work into ordered phases. Each phase produces testable outc
 - [ ] Finalize `run(code: str, timeout: float = 30.0, **kwargs) -> RunResult` (add timeout or other knobs as needed).
 - [ ] Write docstring that explains:
   - Execution is sandboxed (no network, no filesystem); primary output is stdout.
-  - A pandas DataFrame **`sbir_awards`** is available (SBIR awards data).
+  - A pandas DataFrame **`award_data`** is available (SBIR awards data).
   - Column names and brief semantics (or “see docs” link).
   - **Preloaded whitelist** (no `import` in user code): e.g. **pandas**, **math**, numpy, re, json, collections, datetime; list in docstring.
 - [ ] Add module-level docstring or README section that agents can use as context.
 
 ### 3.2 Data download CLI
 
-- [ ] Add CLI entry point **`sbirtools-download-data`** that calls `download_csv_if_missing()` (or equivalent) and writes CSV to the configured cache directory.
-- [ ] Document in README and package docs: run `sbirtools-download-data` to cache the SBIR CSV; set `SBIRTOOLS_CSV_URL` to override the default URL; where the cache lives (e.g. `~/.cache/sbirtools`).
+- [x] CLI **`sbirtools-download-data`** takes the **URL as the first argument** (e.g. `sbirtools-download-data <URL>`). Calls `download_csv(url)` and saves to **`<SBIRTOOLS_CACHE_DIR>/award_data.csv`** (default `~/.cache/sbirtools/award_data.csv`).
+- [x] Document in README: usage `sbirtools-download-data <URL>`, where the cache lives, and that the cache filename is `award_data.csv`.
 
 ### 3.3 README and minimal docs
 
-- [ ] README: purpose, install, run `sbirtools-download-data` to cache data, quick example `run("print(sbir_awards.columns.tolist())")`, link to design/doc for schema and sandbox rules.
+- [ ] README: purpose, install, run `sbirtools-download-data` to cache data, quick example `run("print(award_data.columns.tolist())")`, link to design/doc for schema and sandbox rules.
 - [ ] Optional: add a `docs/` section for “Schema of SBIR DataFrame” (columns from `docs/sample-sbir-awards.csv` / DESIGN.md §5).
 
-**Exit criteria:** Agent-facing docstring and README are sufficient to write correct sandbox code; install with optional data works; `run(code)` is the single entry point returning raw RunResult.
+**Exit criteria:** Agent-facing docstring and README are sufficient to write correct sandbox code; install with optional data works; `run(code)` and **SandboxSession** are the main entry points returning raw RunResult.
+
+---
+
+## Phase 3b: Persistent session (SandboxSession) — implemented
+
+**Goal:** Keep the DataFrame in memory across multiple runs by using a long-lived worker process.
+
+- [x] **Worker process** (`_worker.py`): Load `award_data` once via `_build_sandbox_globals()`, then loop: read length-prefixed code from stdin (4-byte length + UTF-8 payload), validate AST/length, run in sandbox globals, write one JSON result line to stdout.
+- [x] **SandboxSession** (`_sandbox.py`): Start worker on first `run()`, reuse for subsequent `session.run(code)`. Send code length-prefixed over stdin; read one JSON line from stdout with timeout (thread + join). On timeout, kill worker; next `run()` starts a new worker. Thread lock for single-threaded use. `close()` stops the worker; context manager support.
+- [x] Export **SandboxSession** from `__init__.py`; document in README with example.
+- [x] Tests in `tests/test_session.py`: session reuses worker, rejects forbidden code, `close()` idempotent.
+
+**Exit criteria:** `with SandboxSession() as s: s.run("print(len(award_data))")` succeeds; data is loaded once per session.
 
 ---
 
@@ -119,7 +132,7 @@ This plan breaks the work into ordered phases. Each phase produces testable outc
 
 ### 4.2 Integration test
 
-- [ ] One end-to-end test: install, load fixture CSV (e.g. `docs/sample-sbir-awards.csv`), `run("print(sbir_awards.shape)")` and assert stdout contains shape.
+- [ ] One end-to-end test: install, load fixture CSV (e.g. `docs/sample-sbir-awards.csv`), `run("print(award_data.shape)")` and assert stdout contains shape.
 
 ### 4.3 Security-minded checks
 
@@ -155,11 +168,13 @@ Phase 1 (scaffold + data)  →  Phase 2 (sandbox)  →  Phase 3 (API + docs)  �
 
 ## Resolved decisions (from design)
 
-- **DataFrame name:** `sbir_awards`.
-- **Data download:** CLI `sbirtools-download-data`; documented in package docs.
+- **DataFrame name:** `award_data`.
+- **Cache filename:** `award_data.csv` in cache directory.
+- **Data download:** CLI `sbirtools-download-data <URL>` (URL as first argument); documented in package docs.
 - **Python:** 3.10+.
 - **Output:** stdout only (no return-value serialization).
 - **Security:** Multiple layers — AST checks, preloaded whitelist (pandas, math, etc.; no `import` in user code), size limits (max code length, max stdout length; full CSV loaded, no DataFrame cap ~250–300 MB), subprocess + timeout.
+- **Persistent session:** SandboxSession keeps a long-lived worker that loads data once and serves multiple `session.run(code)` calls; use for agents that run code often.
 - **Schema:** See `docs/sample-sbir-awards.csv` and DESIGN.md §5; document in docstring.
 
 ## Open points to resolve during implementation

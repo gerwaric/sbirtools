@@ -32,14 +32,14 @@ The package exposes **one main function** that accepts code and returns a **raw 
 │                           ▼                                     │
 │            ┌──────────────────────────────┐                     │
 │            │  Execution environment       │                     │
-│            │  - sbir_awards (DataFrame),  │                     │
+│            │  - award_data (DataFrame),   │                     │
 │            │    pandas, etc. No network   │                     │
 │            └──────────────────────────────┘                     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-- **Data download:** Users run a **CLI** (e.g. `sbirtools-download-data`) to download the CSV from a configured URL into a cache directory. This is documented in the package docs; no automatic install-time download. Pandas is a dependency; the DataFrame is built when the sandbox is first used (or at import).
-- **Run time:** The main function builds an execution environment that includes the SBIR DataFrame (as `sbir_awards`) and other allowed builtins/modules, runs the user code in the sandbox, and returns a single raw result object (stdout is the primary output).
+- **Data download:** Users run **`sbirtools-download-data <URL>`** (URL as first argument). The CSV is saved to `~/.cache/sbirtools/award_data.csv` (override directory with `SBIRTOOLS_CACHE_DIR`). No automatic install-time download. Pandas is a dependency; the DataFrame is built when the sandbox is first used (or when a persistent worker starts).
+- **Run time:** The main function builds an execution environment that includes the SBIR DataFrame (as `award_data`) and other allowed builtins/modules, runs the user code in the sandbox, and returns a single raw result object (stdout is the primary output). Alternatively, **SandboxSession** keeps a long-lived worker process so the DataFrame is loaded once and reused across many `run()` calls.
 
 ---
 
@@ -49,7 +49,7 @@ The package exposes **one main function** that accepts code and returns a **raw 
 |----------|--------|-----------|
 | API shape | One main function returning a raw result | Simple for agents; no hidden formatting. Caller decides how to present stdout/stderr/result. |
 | Data at install | CSV downloadable and cached at install (or first use) | Reproducible builds; no mandatory network at run time. |
-| Data in sandbox | Single pandas DataFrame named **`sbir_awards`** | Docstring explains columns and usage. |
+| Data in sandbox | Single pandas DataFrame named **`award_data`** | Docstring explains columns and usage. |
 | Sandbox model | Hardened execution with **multiple security layers** (AST checks, import limits, size sanity checks, subprocess/resource limits) | Protect against both accidental misuse and malicious code. |
 | Python version | **3.10+** | Modern and very common. |
 | Primary output | **Stdout** only (no return-value serialization from executed code) | Simple; agent uses printed output. |
@@ -58,10 +58,13 @@ The package exposes **one main function** that accepts code and returns a **raw 
 
 ## 4. Public API
 
-### 4.1 Main entry point
+### 4.1 Entry points
 
-- **`run(code: str, **kwargs) -> RunResult`**  
-  Execute `code` in the sandbox with the SBIR DataFrame and allowed libraries available. Returns a raw result object (see below). Any extra kwargs can be reserved for future options (timeout, memory limit, etc.).
+- **`run(code: str, timeout: float = 30.0, **kwargs) -> RunResult`**  
+  Execute `code` in a **one-off** subprocess with the SBIR DataFrame and allowed libraries available. Each call loads the data (or uses a fresh process). Returns a raw result object (see below). Use when you run code infrequently.
+
+- **`SandboxSession(timeout: float = 30.0)`**  
+  A **persistent** sandbox: a long-lived worker process loads `award_data` once and serves multiple `session.run(code)` calls. Use when you run code many times (e.g. an agent making repeated tool calls). Context manager: `with SandboxSession() as session: session.run(code)`. Call `session.close()` or exit the `with` block to stop the worker.
 
 ### 4.2 Result type
 
@@ -78,7 +81,7 @@ No `result` field: we do not serialize return values from the sandbox. Agents us
 The main function (and/or module) must document:
 
 - That execution runs in a sandbox with **no network or filesystem access**.
-- That a **pandas DataFrame** named **`sbir_awards`** is preloaded (SBIR awards data).
+- That a **pandas DataFrame** named **`award_data`** is preloaded (SBIR awards data).
 - **Column names and semantics** (see §5 Schema below) so the agent can generate correct code.
 - That a **preloaded whitelist** of modules is available (e.g. **pandas**, **math**, numpy, re, json, collections, datetime) and that `import` is not allowed in user code; the docstring should list or reference this whitelist.
 
@@ -90,8 +93,8 @@ The main function (and/or module) must document:
    Single CSV URL, configurable (e.g. environment variable or config file at install/build time). Default can point to a specific SBIR data source; override for testing or mirrors.
 
 2. **Download and cache**  
-   - Users run a **CLI** (e.g. `sbirtools-download-data`) to download the CSV to a known cache location (e.g. `~/.cache/sbirtools`). Document this in the package README and docs.  
-   - If cache is missing at run time, `run()` can fail with a clear error telling the user to run the CLI first (or we optionally download on first use; TBD).
+   - Users run **`sbirtools-download-data <URL>`** (URL as the first argument). The CSV is saved to **`<SBIRTOOLS_CACHE_DIR>/award_data.csv`** (default `~/.cache/sbirtools/award_data.csv`). Document in README.  
+   - If the cache is missing at run time, `run()` (or the worker) fails with a clear error; the user can run the CLI or set `SBIRTOOLS_CSV_PATH` to a local file.
 
 3. **Loading**  
    On first sandbox run (or at import), load the **entire** CSV from the cache path into a pandas DataFrame (~250–300 MB in memory). No row/column cap; the full dataset is available. That same DataFrame (or a copy per run for safety) is injected into the sandbox globals.
@@ -120,11 +123,13 @@ Goals: no network, no filesystem write, no subprocess/shell from user code. Impl
 
 ```
 sbirtools/
-  __init__.py          # run(), RunResult, get_df() if needed
-  _sandbox.py          # execution and env setup
-  _data.py             # URL config, download, cache, load DataFrame
-  _result.py           # RunResult and helpers
-  pyproject.toml       # deps: pandas, optional requests for download
+  __init__.py          # run(), RunResult, SandboxSession
+  _sandbox.py          # run_sandbox(), SandboxSession, AST checks, one-shot runner
+  _worker.py           # long-lived worker loop (load data once, run code via stdin/stdout)
+  _data.py             # URL/cache config, download_csv(url), load_sbir_dataframe()
+  _result.py           # RunResult
+  _cli.py              # sbirtools-download-data entry point
+  pyproject.toml       # deps: pandas; script: sbirtools-download-data
   README, LICENSE, docs/
 ```
 
@@ -145,5 +150,6 @@ Config (URL, cache path) can live in `_data.py` with overrides via env or a smal
 
 - Install (with optional data download) works on Linux/macOS/Windows.
 - `run(code)` executes in a hardened environment with the SBIR DataFrame available.
+- **SandboxSession** allows multiple `session.run(code)` calls with the DataFrame loaded once in a worker process.
 - Result is returned as a single raw object (RunResult) with stdout (primary output), stderr, success, and error_message.
 - Docstring and docs give an agent enough information to write correct, sandbox-compliant code using the DataFrame.
