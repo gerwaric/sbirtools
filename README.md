@@ -2,6 +2,16 @@
 
 A hardened Python sandbox with SBIR awards data for AI agents. Execute agent-supplied code safely with a preloaded pandas DataFrame of SBIR awards (~250–300 MB in memory).
 
+## Motivation
+
+The official SBIR website provides an API that allows end-customers to search SBIR awards data: https://www.sbir.gov/api.
+
+There is also a very useful MCP server that developers can use to give agents access to this data, such as https://github.com/shawndrake2/mcp-sba.
+
+However, both of those tools are limited to by the SBIR's underlying API. This limits the searches you perform, and the API consumer has to manage paging through results while obeying API rate limits. This `sbirtools` packages make the entire SBIR awards database available to an agent as a `pandas` dataframe within a hardened Python sandbox. This allows agents to not only perform complex searches, but they use regular expressions and perform general calculations on the results as needed.
+
+The cost of this approach is keeping a 300MB file loaded into memory, but the benefit is nearly instant access and the ability to write python code to search, manipulate, and process this data with ease.
+
 ## Install
 
 ```bash
